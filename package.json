@@ -1,0 +1,17 @@
+{
+  "name": "author-data-scraper",
+  "version": "1.0.0",
+  "description": "Autonomous Book Authors & Writers Lead Scraper for USA & Canada with Batch AI Verification",
+  "type": "module",
+  "main": "start_author_scraper.js",
+  "scripts": {
+    "start": "node start_author_scraper.js",
+    "audit": "node audit_authors.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "playwright": "^1.49.0"
+  }
+}
