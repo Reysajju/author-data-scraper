@@ -1,5 +1,5 @@
 // start_author_scraper.js - Master Orchestrator for Authors & Book Writers Lead Mining
-// Autonomous search, deep email verification, and 100-lead AI batch cleaning for USA & Canada.
+// USA & Canada Lead Discovery, Social Media Extraction (LinkedIn, FB, IG, X), FastBackgroundCheck & 100-Lead AI Batching
 
 import { chromium } from 'playwright';
 import ExcelJS from 'exceljs';
@@ -74,8 +74,9 @@ const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 async function updateMasterFiles(newCleanedLeads) {
   if (!newCleanedLeads || newCleanedLeads.length === 0) return;
 
-  // 1. Read existing CSV leads to maintain master list
   const allLeadsMap = new Map();
+
+  // 1. Read existing CSV leads to maintain master cumulative list
   if (existsSync(MASTER_CSV)) {
     try {
       const lines = readFileSync(MASTER_CSV, 'utf8').split('\n');
@@ -83,31 +84,32 @@ async function updateMasterFiles(newCleanedLeads) {
         const line = lines[i].trim();
         if (!line) continue;
         const cols = line.split('","').map(c => c.replace(/^"|"$/g, ''));
-        if (cols.length >= 7 && cols[1]) {
-          const lead = {
-            name: cols[0],
-            email: cols[1],
-            phone: cols[2] || '',
-            genre: cols[3] || '',
-            bookTitle: cols[4] || '',
-            country: cols[5] || 'US',
-            location: cols[6] || '',
-            website: cols[7] || '',
-            sourceUrl: cols[8] || '',
-            roleConfirmed: cols[9] || 'Yes - Verified Author',
-            qualityScore: cols[10] || 8,
-            scrapedAt: cols[11] || ''
-          };
+        if (cols.length >= 2 && cols[1]) {
+          const lead = {};
+          HEADERS.forEach((h, idx) => {
+            lead[h.key] = cols[idx] || '';
+          });
           allLeadsMap.set(lead.email.toLowerCase(), lead);
         }
       }
     } catch {}
   }
 
-  // Add new leads to map
+  // Add newly cleaned leads to map
   for (const l of newCleanedLeads) {
     if (l.email && l.email.includes('@')) {
-      allLeadsMap.set(l.email.toLowerCase(), l);
+      const existing = allLeadsMap.get(l.email.toLowerCase()) || {};
+      // Merge and enrich fields if existing
+      allLeadsMap.set(l.email.toLowerCase(), {
+        ...existing,
+        ...l,
+        linkedin: l.linkedin || existing.linkedin || '',
+        facebook: l.facebook || existing.facebook || '',
+        instagram: l.instagram || existing.instagram || '',
+        twitter: l.twitter || existing.twitter || '',
+        bgPhone: l.bgPhone || existing.bgPhone || '',
+        fastBackgroundCheckUrl: l.fastBackgroundCheckUrl || existing.fastBackgroundCheckUrl || ''
+      });
       sharedEmails.add(l.email.toLowerCase());
       if (l.name) sharedNames.add(l.name.toLowerCase());
     }
@@ -116,15 +118,16 @@ async function updateMasterFiles(newCleanedLeads) {
   const allLeads = Array.from(allLeadsMap.values());
   const usaLeads = allLeads.filter(l => l.country === 'US');
   const canadaLeads = allLeads.filter(l => l.country === 'CA');
+  const socialLeads = allLeads.filter(l => l.linkedin || l.instagram || l.facebook || l.twitter);
 
   // 2. Write Master CSV
   const csvHeader = HEADERS.map(h => `"${h.header}"`).join(',') + '\n';
   const csvBody = allLeads.map(l => HEADERS.map(h => csvCell(l[h.key])).join(',')).join('\n') + '\n';
   await fs.writeFile(MASTER_CSV, csvHeader + csvBody, 'utf8');
 
-  // 3. Write Master Excel Workbook with Tabs
+  // 3. Write Master Multi-Tab Excel
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'Autonomous Author Scraper';
+  wb.creator = 'Autonomous Author & Writer Scraper';
 
   // Tab 1: All Authors
   const wsAll = wb.addWorksheet('All Authors');
@@ -147,7 +150,14 @@ async function updateMasterFiles(newCleanedLeads) {
   wsCA.views = [{ state: 'frozen', ySplit: 1 }];
   canadaLeads.forEach(lead => wsCA.addRow(lead));
 
-  // Tab 4: Summary by Genre
+  // Tab 4: Authors with Socials (LinkedIn, IG, FB, X)
+  const wsSocial = wb.addWorksheet('Authors with Socials');
+  wsSocial.columns = HEADERS;
+  wsSocial.getRow(1).font = { bold: true };
+  wsSocial.views = [{ state: 'frozen', ySplit: 1 }];
+  socialLeads.forEach(lead => wsSocial.addRow(lead));
+
+  // Tab 5: Summary by Genre
   const genreCounts = {};
   for (const lead of allLeads) {
     const g = lead.genre || 'Other';
@@ -155,7 +165,7 @@ async function updateMasterFiles(newCleanedLeads) {
   }
   const wsGenre = wb.addWorksheet('Summary by Genre');
   wsGenre.columns = [
-    { header: 'Book Genre / Category', key: 'genre', width: 32 },
+    { header: 'Book Genre / Category', key: 'genre', width: 34 },
     { header: 'Verified Authors Count', key: 'count', width: 24 }
   ];
   wsGenre.getRow(1).font = { bold: true };
@@ -173,22 +183,21 @@ async function updateMasterFiles(newCleanedLeads) {
   }
 
   await saveDedup();
-  log(`💾 Saved ${allLeads.length} total authors to Master Excel & CSV (USA: ${usaLeads.length}, Canada: ${canadaLeads.length})`);
+  log(`💾 Saved ${allLeads.length} total authors to Master Excel & CSV (USA: ${usaLeads.length}, Canada: ${canadaLeads.length}, With Socials: ${socialLeads.length})`);
 }
 
-// ---------------------------------------------------------------- CONTACT EXTRACTION
+// ---------------------------------------------------------------- CONTACT & SOCIAL EXTRACTION
 function extractEmailFromText(text) {
   if (!text) return '';
   const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
   const matches = text.match(emailRegex) || [];
   const invalid = ['example.com', 'w3.org', 'schema.org', 'domain.com', 'sentry.io', 'wordpress', 'cloudflare', 'gravatar', 'github'];
-  
+
   const filtered = matches.filter(e => {
     const low = e.toLowerCase();
     return !invalid.some(inv => low.includes(inv)) && !low.endsWith('.png') && !low.endsWith('.jpg');
   });
 
-  // Prefer direct personal email over generic
   const personal = filtered.find(e => !e.startsWith('info@') && !e.startsWith('contact@') && !e.startsWith('press@'));
   return personal || filtered[0] || '';
 }
@@ -199,42 +208,83 @@ function extractPhoneFromText(text) {
   return phoneMatch ? phoneMatch[0].trim() : '';
 }
 
+function extractSocialsFromUrls(urls) {
+  const socials = {
+    linkedin: '',
+    facebook: '',
+    instagram: '',
+    twitter: '',
+    substackGoodreads: ''
+  };
+
+  for (const rawUrl of urls) {
+    if (!rawUrl || typeof rawUrl !== 'string') continue;
+    const u = rawUrl.trim();
+
+    if (!socials.linkedin && /linkedin\.com\/(?:in|pub)\/[a-zA-Z0-9_-]+/i.test(u)) {
+      socials.linkedin = u.split('?')[0];
+    } else if (!socials.instagram && /instagram\.com\/[a-zA-Z0-9_.]+/i.test(u) && !/instagram\.com\/(?:p|explore|reels|stories|accounts)/i.test(u)) {
+      socials.instagram = u.split('?')[0];
+    } else if (!socials.facebook && /facebook\.com\/[a-zA-Z0-9_.]+/i.test(u) && !/facebook\.com\/(?:sharer|share|login|policies|dialog)/i.test(u)) {
+      socials.facebook = u.split('?')[0];
+    } else if (!socials.twitter && /(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+/i.test(u) && !/(?:twitter\.com|x\.com)\/(?:intent|share|home|search)/i.test(u)) {
+      socials.twitter = u.split('?')[0];
+    } else if (!socials.substackGoodreads && (/\.substack\.com/i.test(u) || /goodreads\.com\/author\/show/i.test(u))) {
+      socials.substackGoodreads = u.split('?')[0];
+    }
+  }
+
+  return socials;
+}
+
 // ---------------------------------------------------------------- BROWSER SCRAPING
 async function deepInspectAuthorPage(page, targetUrl) {
   try {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 16000 });
-    await sleep(rand(400, 700));
+    await sleep(rand(300, 600));
 
     const pageData = await page.evaluate(() => {
-      const txt = (el) => el?.innerText?.replace(/\s+/g, ' ').trim() || '';
       const bodyText = document.body?.innerText || '';
       const title = document.title || '';
 
-      // Look for contact/about page links
-      const links = Array.from(document.querySelectorAll('a[href]')).map(a => ({
-        href: a.href,
-        text: a.innerText.toLowerCase()
-      }));
+      const links = Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
+      const contactLink = links.find(h => /contact|about|press|media|author/i.test(h) && h.startsWith('http')) || '';
 
-      const contactLink = links.find(l => /contact|about|press|media|author/i.test(l.text) && l.href.startsWith('http'))?.href || '';
-      return { bodyText, title, contactLink };
+      return { bodyText, title, links, contactLink };
     });
 
     let email = extractEmailFromText(pageData.bodyText);
     let phone = extractPhoneFromText(pageData.bodyText);
+    const socials = extractSocialsFromUrls(pageData.links);
 
-    // If no email on homepage, visit the contact/about page if found
+    // If no email on landing page, visit contact page
     if (!email && pageData.contactLink && !pageData.contactLink.includes('twitter') && !pageData.contactLink.includes('facebook')) {
       try {
         await page.goto(pageData.contactLink, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await sleep(rand(300, 500));
-        const contactBody = await page.evaluate(() => document.body?.innerText || '');
-        email = extractEmailFromText(contactBody);
-        if (!phone) phone = extractPhoneFromText(contactBody);
+        const contactData = await page.evaluate(() => {
+          const bodyText = document.body?.innerText || '';
+          const links = Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
+          return { bodyText, links };
+        });
+        email = extractEmailFromText(contactData.bodyText);
+        if (!phone) phone = extractPhoneFromText(contactData.bodyText);
+        const contactSocials = extractSocialsFromUrls(contactData.links);
+        socials.linkedin = socials.linkedin || contactSocials.linkedin;
+        socials.facebook = socials.facebook || contactSocials.facebook;
+        socials.instagram = socials.instagram || contactSocials.instagram;
+        socials.twitter = socials.twitter || contactSocials.twitter;
+        socials.substackGoodreads = socials.substackGoodreads || contactSocials.substackGoodreads;
       } catch {}
     }
 
-    return { email, phone, title: pageData.title, snippet: pageData.bodyText.slice(0, 1000) };
+    return {
+      email,
+      phone,
+      socials,
+      title: pageData.title,
+      snippet: pageData.bodyText.slice(0, 1000)
+    };
   } catch {
     return null;
   }
@@ -244,8 +294,9 @@ async function deepInspectAuthorPage(page, targetUrl) {
 async function main() {
   log('========================================================================');
   log('  📚 AUTONOMOUS BOOK AUTHORS & WRITERS SCRAPER (USA & CANADA)');
-  log('  🤖 Integrated with 100-Lead AI Batch Cleaning & Multi-Site Verification');
-  log('  📁 Output Directory: "output/"');
+  log('  🌐 Social Media Extraction: LinkedIn, Instagram, Facebook, Twitter/X');
+  log('  🔍 US Public Records & FastBackgroundCheck Enrichment');
+  log('  🤖 Integrated with 100-Lead AI Batch Cleaning');
   log('========================================================================\n');
 
   loadDedup();
@@ -359,19 +410,34 @@ async function main() {
             if (sharedUrls.has(res.url)) continue;
             sharedUrls.add(res.url);
 
-            // Quick check if email is already visible in search snippet
+            // Direct social classification if URL is a social network
+            const directSocials = extractSocialsFromUrls([res.url]);
+
             let email = extractEmailFromText(res.snippet);
             let phone = extractPhoneFromText(res.snippet);
-            let detailTitle = res.title;
+            let bgPhone = '';
+            let fastBgUrl = '';
             let snippet = res.snippet;
+            let pageSocials = { ...directSocials };
 
-            // If not in snippet, inspect the author's page directly
-            if (!email) {
+            // Check if result is from FastBackgroundCheck / FastPeopleSearch
+            if (res.url.includes('fastbackgroundcheck.com') || res.url.includes('fastpeoplesearch.com')) {
+              fastBgUrl = res.url;
+              bgPhone = extractPhoneFromText(res.snippet);
+            }
+
+            // If not found in snippet and not a social login wall, inspect the page
+            if (!email && !res.url.includes('linkedin.com/in') && !res.url.includes('facebook.com')) {
               const detail = await deepInspectAuthorPage(detailPage, res.url);
               if (detail) {
                 if (detail.email) email = detail.email;
                 if (detail.phone) phone = detail.phone;
                 if (detail.snippet) snippet = detail.snippet;
+                pageSocials.linkedin = pageSocials.linkedin || detail.socials.linkedin;
+                pageSocials.facebook = pageSocials.facebook || detail.socials.facebook;
+                pageSocials.instagram = pageSocials.instagram || detail.socials.instagram;
+                pageSocials.twitter = pageSocials.twitter || detail.socials.twitter;
+                pageSocials.substackGoodreads = pageSocials.substackGoodreads || detail.socials.substackGoodreads;
               }
             }
 
@@ -379,14 +445,28 @@ async function main() {
             if (email && !sharedEmails.has(email.toLowerCase())) {
               sharedEmails.add(email.toLowerCase());
 
+              // Clean author name from title
+              let cleanName = res.title
+                .split(/[-|•–:]/)[0]
+                .replace(/\(.*?\)/g, '')
+                .replace(/@\S+/g, '')
+                .trim() || 'Author';
+
               const rawLead = {
-                name: res.title.split(/[-|•–:]/)[0].trim() || 'Author',
+                name: cleanName,
                 email: email.toLowerCase(),
                 phone: phone,
+                bgPhone: bgPhone,
                 genre: genre,
                 country: loc.country,
                 location: `${loc.name}, ${loc.country}`,
-                website: res.url,
+                website: res.url.includes('linkedin.com') || res.url.includes('instagram.com') ? '' : res.url,
+                linkedin: pageSocials.linkedin,
+                facebook: pageSocials.facebook,
+                instagram: pageSocials.instagram,
+                twitter: pageSocials.twitter,
+                substackGoodreads: pageSocials.substackGoodreads,
+                fastBackgroundCheckUrl: fastBgUrl,
                 sourceUrl: res.url,
                 snippet: snippet
               };
@@ -394,7 +474,14 @@ async function main() {
               rawLeadsBuffer.push(rawLead);
               state.totalScraped++;
 
-              log(`  ★ CANDIDATE #${state.totalScraped} BUFFERED: "${rawLead.name}" | ✉️ ${rawLead.email} | 📍 ${loc.name} (${loc.country}) | ${genre} (Buffer: ${rawLeadsBuffer.length}/${AI_BATCH_SIZE})`);
+              const socialTags = [
+                rawLead.linkedin ? 'LI' : '',
+                rawLead.instagram ? 'IG' : '',
+                rawLead.facebook ? 'FB' : '',
+                rawLead.twitter ? 'X' : ''
+              ].filter(Boolean).join('/');
+
+              log(`  ★ CANDIDATE #${state.totalScraped} BUFFERED: "${rawLead.name}" | ✉️ ${rawLead.email} | 📍 ${loc.name} (${loc.country}) | ${socialTags ? `📱 [${socialTags}] | ` : ''}${genre} (Buffer: ${rawLeadsBuffer.length}/${AI_BATCH_SIZE})`);
 
               // TRIGGER AI CLEANING WHEN BUFFER REACHES BATCH SIZE (100 LEADS)
               if (rawLeadsBuffer.length >= AI_BATCH_SIZE) {
@@ -406,16 +493,16 @@ async function main() {
               }
             }
 
-            await sleep(rand(400, 800));
+            await sleep(rand(350, 700));
           }
         } catch (err) {
           log('! Query error:', err.message.split('\n')[0]);
-          await sleep(2500);
+          await sleep(2000);
         }
 
         // Save progress state checkpoint
         await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2));
-        await sleep(rand(1000, 2000));
+        await sleep(rand(800, 1600));
       }
     }
   }

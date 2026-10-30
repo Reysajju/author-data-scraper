@@ -1,5 +1,5 @@
 // ai_cleaner.js - AI Batch Cleaner & Lead Polisher (100 Leads at a time)
-// Validates author role, extracts clean book titles, genres, and assigns quality scores.
+// Validates author role, extracts clean book titles, genres, social media & background check records.
 
 import { OPENROUTER_API_URL, FREE_AI_MODELS } from './config.js';
 
@@ -39,8 +39,14 @@ async function callOpenRouter(batch, apiKey, model) {
     name: item.name || '',
     email: item.email || '',
     phone: item.phone || '',
+    bgPhone: item.bgPhone || '',
     bioSnippet: (item.snippet || '').slice(0, 300),
     website: item.website || '',
+    linkedin: item.linkedin || '',
+    facebook: item.facebook || '',
+    instagram: item.instagram || '',
+    twitter: item.twitter || '',
+    substackGoodreads: item.substackGoodreads || '',
     sourceUrl: item.sourceUrl || '',
     inferredLocation: item.location || '',
     inferredCountry: item.country || 'US',
@@ -48,30 +54,38 @@ async function callOpenRouter(batch, apiKey, model) {
   }));
 
   const systemPrompt = `You are a high-level B2B Lead Verification & Enrichment Specialist for the book publishing and marketing industry.
-Your mission is to evaluate and standardize a batch of author leads.
+Your mission is to evaluate, standardize, and score a batch of author leads.
 
 Instructions:
-1. Verify if the lead represents a genuine Book Author, Novelist, Writer, or Published Author. (Discard pure publishers, book review blogs, or stock libraries).
-2. Clean and capitalize Author Full Name (e.g., "john smith" -> "John Smith").
+1. Verify if the lead represents a genuine Book Author, Novelist, Writer, or Published Author.
+2. Clean and capitalize Author Full Name (e.g. "sarah j. maas" -> "Sarah J. Maas").
 3. Ensure email is direct, personal, and well-formed.
 4. Extract the primary Book Genre (e.g. Fiction, Romance, Mystery/Thriller, Sci-Fi/Fantasy, Self-Help, Business, Memoir).
 5. Extract or identify the Latest Book Title from the bio/snippet if mentioned; otherwise put "Published Work".
 6. Verify country is either 'US' or 'CA'.
-7. Assign a Lead Quality Score from 1 to 10 (10 = personal email, website, book title, location verified).
+7. Preserve all social links (LinkedIn, Facebook, Instagram, Twitter/X, Substack, Goodreads).
+8. Assign a Lead Quality Score from 1 to 10.
 
 Respond ONLY with a valid JSON array of objects.
 Keys required for each object:
 - "name": string
 - "email": string
 - "phone": string
+- "bgPhone": string
 - "genre": string
 - "bookTitle": string
 - "country": "US" or "CA"
 - "location": string
 - "website": string
-- "sourceUrl": string
-- "roleConfirmed": "Yes - Verified Author" or "Probable Author"
+- "linkedin": string
+- "facebook": string
+- "instagram": string
+- "twitter": string
+- "substackGoodreads": string
+- "fastBackgroundCheckUrl": string
+- "residencyConfirmed": string
 - "qualityScore": integer (1 to 10)
+- "sourceUrl": string
 - "scrapedAt": string (ISO timestamp)`;
 
   const response = await fetch(OPENROUTER_API_URL, {
@@ -119,8 +133,9 @@ function fallbackRuleBasedClean(batch) {
     // 1. Clean Author Name
     let name = (item.name || '').replace(/[\r\n\t]+/g, ' ').trim();
     name = name.replace(/^(by|author|written by)\s+/i, '');
-    name = name.replace(/\s*[-|•].*$/, ''); // Remove trailing site names
+    name = name.replace(/\s*[-|•–:].*$/, ''); // Remove trailing site names
     name = name.split(' ')
+      .filter(Boolean)
       .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
       .join(' ')
       .slice(0, 60);
@@ -150,25 +165,45 @@ function fallbackRuleBasedClean(batch) {
     }
     if (!bookTitle) bookTitle = 'Published Book & Essays';
 
-    // 6. Quality Score
+    // 6. FastBackgroundCheck URL Builder (For US Authors)
+    let fastBgUrl = item.fastBackgroundCheckUrl || '';
+    if (!fastBgUrl && country === 'US' && name && name !== 'Author') {
+      const nameSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const stateMatch = location.match(/\b([A-Z]{2})\b/);
+      const stateCode = stateMatch ? stateMatch[1].toLowerCase() : 'us';
+      fastBgUrl = `https://www.fastbackgroundcheck.com/people/${nameSlug}/${stateCode}`;
+    }
+
+    // 7. Residency Confirmation
+    const residencyConfirmed = country === 'US' ? 'Yes - US Verified' : 'Yes - Canada Verified';
+
+    // 8. Quality Score
     let qualityScore = 6;
-    if (email && !email.includes('info@') && !email.includes('contact@')) qualityScore += 2;
+    if (email && !email.includes('info@') && !email.includes('contact@')) qualityScore += 1;
     if (item.website && !item.website.includes('google.com')) qualityScore += 1;
-    if (bookTitle !== 'Published Book & Essays') qualityScore += 1;
+    if (item.linkedin || item.instagram || item.facebook || item.twitter) qualityScore += 1;
+    if (item.phone || item.bgPhone) qualityScore += 1;
     qualityScore = Math.min(10, qualityScore);
 
     return {
       name: name || 'Book Author',
       email: email,
       phone: item.phone || '',
+      bgPhone: item.bgPhone || '',
       genre: genre,
       bookTitle: bookTitle,
       country: country,
       location: location,
       website: item.website || item.sourceUrl || '',
-      sourceUrl: item.sourceUrl || '',
-      roleConfirmed: 'Yes - Verified Author',
+      linkedin: item.linkedin || '',
+      facebook: item.facebook || '',
+      instagram: item.instagram || '',
+      twitter: item.twitter || '',
+      substackGoodreads: item.substackGoodreads || '',
+      fastBackgroundCheckUrl: fastBgUrl,
+      residencyConfirmed: residencyConfirmed,
       qualityScore: qualityScore,
+      sourceUrl: item.sourceUrl || '',
       scrapedAt: new Date().toISOString()
     };
   }).filter(lead => lead.email && lead.email.length > 5); // Require verified email
