@@ -23,7 +23,7 @@ git init
 git config --global user.name "Reysajju"
 git config --global user.email "sajjadr742@gmail.com"
 git add .
-git commit -m "Initial commit: Author Data Scraper with 24/7 GitHub Actions"
+git commit -m "Fix GitHub Actions setup error, add Socials (LinkedIn, IG, FB, X) & FastBackgroundCheck verification" 2>nul
 git remote remove origin 2>nul
 git remote add origin %USER_INPUT%
 git branch -M main
@@ -34,13 +34,11 @@ git push -u origin main --force
 if %ERRORLEVEL% equ 0 (
     echo.
     echo ======================================================================
-    echo    SUCCESS! YOUR REPOSITORY IS LIVE ON GITHUB!
+    echo    SUCCESS! LATEST UPDATE IS LIVE ON GITHUB!
     echo ======================================================================
     echo  1. Open your repository on GitHub.
-    echo  2. Go to 'Settings' -^> 'Actions' -^> 'General' -^> 'Workflow permissions'
-    echo     and select 'Read and write permissions', then click Save.
-    echo  3. Click on the 'Actions' tab.
-    echo  4. Click 'Run workflow' to start the 24/7 cloud scraper!
+    echo  2. Click on the 'Actions' tab.
+    echo  3. Click 'Run workflow' to start the 24/7 cloud scraper!
     echo ======================================================================
 ) else (
     echo.
